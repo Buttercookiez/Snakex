@@ -99,8 +99,9 @@ const GameSandbox: FC = () => {
         createOscillator(400, 0.2, 'sawtooth', 0.5);
         setTimeout(() => createOscillator(300, 0.2, 'sawtooth', 0.4), 100);
       } else if (type === 'levelup') {
+         // Fanfare sound
          for (let i = 0; i < 5; i++) {
-            setTimeout(() => createOscillator(400 + i * 100, 0.1, 'square', 0.3), i * 50);
+            setTimeout(() => createOscillator(500 + i * 150, 0.15, 'square', 0.4), i * 60);
          }
       }
     } catch (e) {}
@@ -123,6 +124,7 @@ const GameSandbox: FC = () => {
   const dirRef = useRef({x: 0, y: -1});
   const nextDirRef = useRef({x: 0, y: -1});
   const loopRef = useRef(null);
+  const itemsEatenRef = useRef(0); // Track items eaten to calc speed
   const [tick, setTick] = useState(0);
 
   // --- LOADING TIMER ---
@@ -153,6 +155,7 @@ const GameSandbox: FC = () => {
     spawnFood();
     setScore(0);
     setSpeedLevel(1);
+    itemsEatenRef.current = 0; // Reset counter
     setIsPaused(false);
     setGameState('PLAYING');
     if(audioCtxRef.current?.state === 'suspended') audioCtxRef.current.resume();
@@ -175,6 +178,7 @@ const GameSandbox: FC = () => {
   const changeDirection = (x: any, y: any) => {
     if (gameState !== 'PLAYING') return;
     if(audioCtxRef.current?.state === 'suspended') audioCtxRef.current.resume();
+    // Prevent 180 degree turns
     if (dirRef.current.x === -x && dirRef.current.y === -y) return;
     nextDirRef.current = {x, y};
   };
@@ -190,7 +194,10 @@ const GameSandbox: FC = () => {
       return;
     }
 
-    const currentSpeed = Math.max(80, 200 - (speedLevel - 1) * 15);
+    // SPEED CALCULATION:
+    // Base speed 200ms. Subtracts 12ms per level. Min speed 60ms.
+    // The higher the level, the smaller the interval (faster).
+    const currentSpeed = Math.max(60, 200 - (speedLevel - 1) * 12);
 
     loopRef.current = setInterval(() => {
       // 1. UPDATE SNAKE
@@ -218,18 +225,19 @@ const GameSandbox: FC = () => {
         // @ts-ignore
         setExplosions(prev => [...prev, { id: Date.now(), x: newHead.x, y: newHead.y }]);
 
-        let newLvl = speedLevel;
-        setScore((s: any) => {
-           const n = s + 10;
-           newLvl = Math.floor(n / 50) + 1;
-           return n;
-        });
-        if (newLvl > speedLevel) {
-            setSpeedLevel(newLvl);
+        // Update Score
+        setScore((s: any) => s + 10);
+        itemsEatenRef.current += 1;
+
+        // CHECK LEVEL UP LOGIC
+        // Every 5 items (50 points), increase speed level
+        if (itemsEatenRef.current % 5 === 0) {
+            setSpeedLevel(prev => prev + 1);
             if(soundOn) playSound('levelup');
         } else {
             if(soundOn) playSound('eat');
         }
+
         spawnFood();
       } else {
         newSnake.pop();
@@ -239,7 +247,7 @@ const GameSandbox: FC = () => {
       snakeRef.current = newSnake;
       setTick((t: any) => t + 1);
 
-    }, currentSpeed);
+    }, currentSpeed); // Re-runs effect when currentSpeed changes
 
     return () => clearInterval(loopRef.current);
   }, [gameState, isPaused, speedLevel, playSound, tick, soundOn]);
