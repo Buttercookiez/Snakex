@@ -119,6 +119,14 @@ const GameSandbox: FC = () => {
   // New Explosion State (Array of explosion events)
   const [explosions, setExplosions] = useState([]); 
   
+  // Power-up states
+  const [activePowerUps, setActivePowerUps] = useState({
+    slowTime: 0,
+    shield: false,
+    doubleScore: 0
+  });
+  const [powerUpFood, setPowerUpFood] = useState(null); // {x, y, type}
+  
   const snakeRef = useRef([{x: 10, y: 10}]);
   const foodRef = useRef({x: 15, y: 5});
   const dirRef = useRef({x: 0, y: -1});
@@ -153,6 +161,8 @@ const GameSandbox: FC = () => {
     nextDirRef.current = {x: 0, y: -1};
     setExplosions([]);
     spawnFood();
+    setPowerUpFood(null);
+    setActivePowerUps({ slowTime: 0, shield: false, doubleScore: 0 });
     setScore(0);
     setSpeedLevel(1);
     itemsEatenRef.current = 0; // Reset counter
@@ -173,6 +183,45 @@ const GameSandbox: FC = () => {
       valid = !snakeRef.current.some((s: any) => s.x === newFood.x && s.y === newFood.y);
     }
     foodRef.current = newFood;
+    
+    // Spawn power-up 20% of the time
+    if (Math.random() < 0.2) {
+      spawnPowerUp();
+    }
+  };
+
+  const spawnPowerUp = () => {
+    let valid = false;
+    let newPowerUp = {x: 0, y: 0, type: ''};
+    while (!valid) {
+      newPowerUp = {
+        x: Math.floor(Math.random() * GRID_SIZE),
+        y: Math.floor(Math.random() * GRID_SIZE),
+        type: ['slowTime', 'shield', 'doubleScore', 'bomb'][Math.floor(Math.random() * 4)]
+      };
+      // eslint-disable-next-line
+      valid = !snakeRef.current.some((s: any) => s.x === newPowerUp.x && s.y === newPowerUp.y) &&
+              !(newPowerUp.x === foodRef.current.x && newPowerUp.y === foodRef.current.y);
+    }
+    setPowerUpFood(newPowerUp);
+  };
+
+  const handlePowerUp = (type: string, headPos: any) => {
+    if (type === 'slowTime') {
+      setActivePowerUps(prev => ({ ...prev, slowTime: Date.now() + 5000 }));
+      if(soundOn) playSound('eat');
+    } else if (type === 'shield') {
+      setActivePowerUps(prev => ({ ...prev, shield: true }));
+      if(soundOn) playSound('eat');
+    } else if (type === 'doubleScore') {
+      setActivePowerUps(prev => ({ ...prev, doubleScore: Date.now() + 10000 }));
+      if(soundOn) playSound('eat');
+    } else if (type === 'bomb') {
+      // Explosion at power-up location
+      setExplosions(prev => [...prev, { id: Date.now(), x: headPos.x, y: headPos.y }]);
+      if(soundOn) playSound('die');
+    }
+    setPowerUpFood(null);
   };
 
   const changeDirection = (x: any, y: any) => {
@@ -194,10 +243,14 @@ const GameSandbox: FC = () => {
       return;
     }
 
-    // SPEED CALCULATION:
-    // Base speed 200ms. Subtracts 12ms per level. Min speed 60ms.
-    // The higher the level, the smaller the interval (faster).
-    const currentSpeed = Math.max(60, 200 - (speedLevel - 1) * 12);
+    // Check if slow time is active
+    const isSlowActive = activePowerUps.slowTime > Date.now();
+    
+    // SPEED CALCULATION with slow time modifier
+    let currentSpeed = Math.max(60, 200 - (speedLevel - 1) * 12);
+    if (isSlowActive) {
+      currentSpeed = currentSpeed * 2; // Double interval = half speed
+    }
 
     loopRef.current = setInterval(() => {
       // 1. UPDATE SNAKE
@@ -205,29 +258,76 @@ const GameSandbox: FC = () => {
       const head = snakeRef.current[0];
       const newHead = { x: head.x + dirRef.current.x, y: head.y + dirRef.current.y };
 
-      // Walls
+      // Walls - check for shield
       if (newHead.x < 0 || newHead.x >= GRID_SIZE || newHead.y < 0 || newHead.y >= GRID_SIZE) {
+        if (activePowerUps.shield) {
+          setActivePowerUps(prev => ({ ...prev, shield: false }));
+          if(soundOn) playSound('eat');
+          // Bounce back
+          return;
+        }
         gameOver();
         return;
       }
-      // Self collision
+      // Self collision - check for shield
       if (snakeRef.current.some((s: any) => s.x === newHead.x && s.y === newHead.y)) {
+        if (activePowerUps.shield) {
+          setActivePowerUps(prev => ({ ...prev, shield: false }));
+          if(soundOn) playSound('eat');
+          return;
+        }
         gameOver();
         return;
       }
 
       const newSnake = [newHead, ...snakeRef.current];
       
-      // Eat
-      if (newHead.x === foodRef.current.x && newHead.y === foodRef.current.y) {
+      // Check power-up collision
+      if (powerUpFood && newHead.x === powerUpFood.x && newHead.y === powerUpFood.y) {
+        const powerUpType = powerUpFood.type;
+        handlePowerUp(powerUpType, newHead);
+        
+        // For bomb, remove 2 blocks from tail with explosion animation
+        if (powerUpType === 'bomb') {
+          const removeCount = Math.min(2, newSnake.length - 1);
+          
+          // Add explosions at the tail segments being removed
+          for (let i = 1; i <= removeCount; i++) {
+            const tailSeg = newSnake[newSnake.length - i];
+            // @ts-ignore
+            setExplosions(prev => [...prev, { id: Date.now() + i, x: tailSeg.x, y: tailSeg.y }]);
+          }
+          
+          for (let i = 0; i < removeCount; i++) {
+            newSnake.pop();
+          }
+          newSnake.pop(); // Also remove the normal movement pop
+        } else {
+          // For other power-ups, don't grow the snake
+          newSnake.pop();
+        }
+      }
+      // Eat normal food
+      else if (newHead.x === foodRef.current.x && newHead.y === foodRef.current.y) {
         
         // ✨ SPAWN EXPLOSION (CSS ANIMATION)
         // @ts-ignore
         setExplosions(prev => [...prev, { id: Date.now(), x: newHead.x, y: newHead.y }]);
 
-        // Update Score
-        setScore((s: any) => s + 10);
+        // Update Score (check if double score is active)
+        const isDoubleActive = activePowerUps.doubleScore > Date.now();
+        const points = isDoubleActive ? 20 : 10;
+        setScore((s: any) => s + points);
         itemsEatenRef.current += 1;
+
+        // If double score is active, grow by 2 blocks instead of 1
+        if (!isDoubleActive) {
+          // Normal growth - snake already has new head, just don't pop
+        } else {
+          // Double growth - add one extra segment
+          const tail = newSnake[newSnake.length - 1];
+          newSnake.push({ ...tail });
+        }
 
         // CHECK LEVEL UP LOGIC
         // Every 5 items (50 points), increase speed level
@@ -250,7 +350,7 @@ const GameSandbox: FC = () => {
     }, currentSpeed); // Re-runs effect when currentSpeed changes
 
     return () => clearInterval(loopRef.current);
-  }, [gameState, isPaused, speedLevel, playSound, tick, soundOn]);
+  }, [gameState, isPaused, speedLevel, playSound, tick, soundOn, activePowerUps, powerUpFood]);
 
   const gameOver = () => {
     setGameState('GAME_OVER');
@@ -279,6 +379,18 @@ const GameSandbox: FC = () => {
   const isSnake = (x: number, y: number) => snakeRef.current.some((s: any) => s.x === x && s.y === y);
   const isHead = (x: number, y: number) => snakeRef.current[0].x === x && snakeRef.current[0].y === y;
   const isFood = (x: number, y: number) => foodRef.current.x === x && foodRef.current.y === y;
+  const isPowerUp = (x: number, y: number) => powerUpFood && powerUpFood.x === x && powerUpFood.y === y;
+  
+  // Power-up icon helper
+  const getPowerUpIcon = (type: string) => {
+    switch(type) {
+      case 'slowTime': return '⏱';
+      case 'shield': return '🛡';
+      case 'doubleScore': return '×2';
+      case 'bomb': return '💣';
+      default: return '?';
+    }
+  };
 
   // --- STYLES FOR BUTTONS ---
   const controlBtnClass = "w-14 h-14 bg-black border border-white/20 rounded-xl flex items-center justify-center text-white text-xl transition-all duration-100 active:scale-90 active:bg-white active:text-black hover:border-white shadow-lg";
@@ -327,7 +439,7 @@ const GameSandbox: FC = () => {
           SNAKEX
         </h1>
         
-        <div className="flex justify-between gap-2">
+        <div className="flex justify-between gap-2 mb-2">
            <div className="flex-1 bg-[#111] border-2 border-[#333] p-2 text-center min-w-[3.5rem]">
              <div className="text-white text-[8px] mb-1">SCORE</div>
              <div className="text-xs text-white">{score}</div>
@@ -340,6 +452,25 @@ const GameSandbox: FC = () => {
              <div className="text-white text-[8px] mb-1">LVL</div>
              <div className="text-xs text-white">{speedLevel}</div>
            </div>
+        </div>
+        
+        {/* Active Power-ups Display */}
+        <div className="flex gap-1 justify-center flex-wrap min-h-[20px]">
+          {activePowerUps.shield && (
+            <div className="bg-white text-black text-[8px] px-2 py-1 border border-white flex items-center gap-1">
+              🛡 SHIELD
+            </div>
+          )}
+          {activePowerUps.slowTime > Date.now() && (
+            <div className="bg-white text-black text-[8px] px-2 py-1 border border-white flex items-center gap-1">
+              ⏱ SLOW
+            </div>
+          )}
+          {activePowerUps.doubleScore > Date.now() && (
+            <div className="bg-white text-black text-[8px] px-2 py-1 border border-white flex items-center gap-1">
+              ×2 SCORE
+            </div>
+          )}
         </div>
       </div>
 
@@ -357,6 +488,7 @@ const GameSandbox: FC = () => {
                   const isS = isSnake(x, y);
                   const isH = isHead(x, y);
                   const isF = isFood(x, y);
+                  const isPU = isPowerUp(x, y);
 
                   return (
                     <div key={i} className="w-full h-full bg-[#111] border-0 outline outline-1 outline-[#0a0a0a] relative">
@@ -364,7 +496,9 @@ const GameSandbox: FC = () => {
                             <div className="absolute inset-0 bg-white" 
                                  style={{
                                     boxShadow: isH ? '0 0 12px rgba(255,255,255,0.3)' : 'none',
-                                    animation: 'snakePulse 0.2s ease-out'
+                                    animation: 'snakePulse 0.2s ease-out',
+                                    outline: activePowerUps.shield && isH ? '2px solid white' : 'none',
+                                    outlineOffset: activePowerUps.shield && isH ? '2px' : '0'
                                  }}
                             >
                                 {isH && <div className="absolute top-[25%] left-[15%] w-[25%] h-[25%] bg-black" />}
@@ -379,6 +513,21 @@ const GameSandbox: FC = () => {
                                   <svg viewBox="0 0 24 24" fill="black" className="w-[65%] h-[65%]">
                                      <path d="M2.665 4.607C1.942 4.607 1.258 4.965.86 5.567L.06 6.768c-.296.444-.025 1.05.508 1.05h19.866c.723 0 1.407-.358 1.805-.96l.8-1.2c.296-.445.025-1.052-.508-1.052H2.665zM21.334 19.393c.723 0 1.407-.358 1.805-.96l.8-1.2c.296-.444.025-1.05-.508-1.05H2.765c-.723 0-1.407.358-1.805.96l-.8 1.2c-.296.445-.025 1.052.508 1.052h18.666zM18.17 10.453H1.503c-.723 0-1.407.358-1.805.96l-.8 1.2c-.296.444-.025 1.05.508 1.05h19.866c.723 0 1.407-.358 1.805-.96l.8-1.2c.296-.445.025-1.052-.508-1.052z" />
                                   </svg>
+                               </div>
+                            </div>
+                        )}
+                        {/* Power-up rendering */}
+                        {isPU && (
+                            <div className="absolute inset-0 z-10 flex items-center justify-center"
+                                 style={{ animation: 'foodPulse 0.6s ease-in-out infinite alternate' }}
+                            >
+                               <div className={`w-[75%] h-[75%] border-2 border-white flex items-center justify-center text-[10px] font-bold
+                                   ${powerUpFood.type === 'slowTime' ? 'bg-[#333]' : ''}
+                                   ${powerUpFood.type === 'shield' ? 'bg-[#222] rounded-full' : ''}
+                                   ${powerUpFood.type === 'doubleScore' ? 'bg-white text-black' : ''}
+                                   ${powerUpFood.type === 'bomb' ? 'bg-[#444]' : ''}
+                               `}>
+                                  {getPowerUpIcon(powerUpFood.type)}
                                </div>
                             </div>
                         )}
